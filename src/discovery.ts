@@ -134,7 +134,8 @@ export function discoverNodes(hass: HomeAssistant): NodeInfo[] {
       .filter(([, info]) => info.device_id === deviceId)
       .map(([id]) => id);
     const ePrefix = longestCommonPrefix(deviceEntityIds);
-    const eSuffix = majoritySuffix(deviceEntityIds);
+    const slugEntityIds = deviceEntityIds.filter((id) => !id.match(/_neighbor_[0-9a-f]+(_seen)?$/));
+    const eSuffix = majoritySuffix(slugEntityIds);
     nodes.push({
       name: device.name_by_user || device.name || deviceId,
       deviceId,
