@@ -281,7 +281,7 @@ export class MeshcoreTraceCard extends MeshcoreBaseCard {
           opacity: 0.9;
         ">
           <ha-icon icon="mdi:alert-circle"></ha-icon>
-          ${escapeHtml(t("trace.zero_hop_only") || "⚠️ Trace działa TYLKO dla połączeń 0-hop (bezpośrednich)")}
+          ${escapeHtml(t("trace.zero_hop_only") || "Trace działa TYLKO dla połączeń 0-hop (bezpośrednich)")}
         </div>
 
         <div style="margin-bottom: 12px;">
