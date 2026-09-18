@@ -162,6 +162,12 @@ export interface MeshcoreMessageCardConfig {
   type?: string;
   default_channel?: string | number;
   use_repeater_names?: boolean;
+  /** Which hub/companion this card acts as. Accepts a pubkey prefix or a hub name.
+   *  Omitted = first discovered hub, i.e. the previous behaviour. */
+  hub?: string;
+  /** Explicit helper overrides for setups where the registry lookup is unavailable. */
+  channel_entity?: string;
+  contact_entity?: string;
 }
 
 export interface MeshcoreQuickRepeaterConfig {
