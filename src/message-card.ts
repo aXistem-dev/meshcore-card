@@ -408,25 +408,57 @@ export class MeshcoreMessageCard extends HTMLElement {
 
   private _parseLogbookEntry(item: any, myHubName: string): any | null {
     const fullText = item.message || "";
-    let sender = "", content = fullText;
+    let sender = "";
+    let content = fullText;
+
+    // Od meshcore 3.x (fix #370) nazwa przed pierwszym ": " jest zawsze nadawcą
+    // — niezależnie od tego, czy nadawca jest kontaktem na companionie.
     const colonIndex = fullText.indexOf(": ");
     if (colonIndex !== -1) {
       const before = fullText.substring(0, colonIndex);
       content = fullText.substring(colonIndex + 2);
+
+      // HA logbook może poprzedzać wpis formatem "Hub > Nadawca: tekst".
+      // Zachowujemy kompatybilność — bierzemy część po ostatnim ">".
       const gtIndex = before.lastIndexOf(">");
-      sender = gtIndex !== -1 ? before.substring(gtIndex + 1).trim() : before.trim();
+      sender = (gtIndex !== -1 ? before.substring(gtIndex + 1) : before).trim();
     } else {
+      // Fallback dla wpisów bez ": " (starsze formaty bez dwukropka).
       const gtIndex = fullText.indexOf(">");
       if (gtIndex !== -1) {
         const afterGt = fullText.substring(gtIndex + 1).trim();
         const spaceIndex = afterGt.indexOf(" ");
-        if (spaceIndex !== -1) { sender = afterGt.substring(0, spaceIndex).trim(); content = afterGt.substring(spaceIndex + 1).trim(); }
-        else { sender = afterGt; content = ""; }
+        if (spaceIndex !== -1) {
+          sender = afterGt.substring(0, spaceIndex).trim();
+          content = afterGt.substring(spaceIndex + 1).trim();
+        } else {
+          sender = afterGt;
+          content = "";
+        }
       }
     }
+
+    if (sender.toLowerCase() === "unknown") {
+      const innerColon = content.indexOf(": ");
+      if (innerColon !== -1) {
+        const innerSender = content.substring(0, innerColon).trim();
+        if (innerSender && innerSender.length <= 64 && !/[\r\n]/.test(innerSender)) {
+          sender = innerSender;
+          content = content.substring(innerColon + 2);
+        }
+      }
+    }
+
     if (!sender || sender === "?") return null;
+
     const isSent = sender.toLowerCase() === myHubName.toLowerCase();
-    return { text: content || fullText, fullText, sender, time: new Date(item.when).getTime() / 1000, direction: isSent ? "sent" : "received" };
+    return {
+      text: content || fullText,
+      fullText,
+      sender,
+      time: new Date(item.when).getTime() / 1000,
+      direction: isSent ? "sent" : "received",
+    };
   }
 
   private async _loadChannelMessages(channelIdx: number, callId: number): Promise<any[]> {
