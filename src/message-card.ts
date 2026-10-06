@@ -312,20 +312,102 @@ export class MeshcoreMessageCard extends HTMLElement {
     return null;
   }
 
-  private _getMyHubName(): string {
-    if (!this._hass) return "Hub";
-    const hubs = discoverHubs(this._hass);
-    if (hubs.length > 0) return hubs[0].name;
-    const channelSelect = Object.values(this._hass.states).find(s => s.entity_id === "select.meshcore_channel");
-    if (channelSelect && channelSelect.attributes.friendly_name) {
-      const match = channelSelect.attributes.friendly_name.match(/MeshCore\s+([^\s(]+)/i);
-      if (match) return match[1];
+  /* ---------- Wykrywanie nazwy własnego companiona ---------- */
+  private _getMyHubNames(): Set<string> {
+    const names = new Set<string>();
+    if (!this._hass) return names;
+
+    // Generyczne nazwy, które nie są nazwami companiona
+    const GENERIC = new Set([
+      "channel", "hub", "meshcore", "meshcore card", "meshcore channel",
+      "meshcore update", "update",
+    ]);
+
+    const add = (v: any) => {
+      if (v === undefined || v === null) return;
+      const s = String(v).trim().toLowerCase();
+      if (!s) return;
+      if (GENERIC.has(s)) return;
+      if (s.length < 2) return;
+      if (/repeater/i.test(s)) return;
+      names.add(s);
+    };
+
+    const extractFromDeviceName = (devName: any): void => {
+      if (!devName) return;
+      const s = String(devName).trim();
+      if (/repeater/i.test(s)) return;
+      const stripped = s.replace(/\s*\([a-fA-F0-9]{4,}\)\s*$/, "").trim();
+      const m = stripped.match(/^MeshCore\s+(.+)$/i);
+      if (m) add(m[1]);
+      else add(stripped);
+    };
+
+    for (const hub of discoverHubs(this._hass)) {
+      if (hub?.name) extractFromDeviceName(String(hub.name));
     }
+
+    const channelSelect = Object.values(this._hass.states)
+      .find(s => s.entity_id === "select.meshcore_channel");
+    if (channelSelect?.attributes?.friendly_name) {
+      const fn = String(channelSelect.attributes.friendly_name);
+      const match = fn.match(/MeshCore\s+([A-Za-z0-9][^\s(]*)/i);
+      if (match) add(match[1]);
+    }
+
     for (const [entityId, state] of Object.entries(this._hass.states)) {
-      if ((entityId.includes("_node_status") || entityId.includes("_status")) && state.attributes?.adv_name)
-        return state.attributes.adv_name;
+      if (!entityId.includes(".meshcore_")) continue;
+      if (/_contact$/.test(entityId)) continue;
+      const attrs = state.attributes as any;
+      if (attrs?.node_name) add(attrs.node_name);
+      if (attrs?.adv_name) add(attrs.adv_name);
     }
-    return "Hub";
+
+    try {
+      const hassAny = this._hass as any;
+      const entities = hassAny.entities as Record<string, any> | undefined;
+      const devices = hassAny.devices as Record<string, any> | undefined;
+      if (entities && devices) {
+        const companionDeviceIds = new Set<string>();
+        for (const [eid, er] of Object.entries(entities)) {
+          if (!eid.includes(".meshcore_")) continue;
+          if (/_contact$/.test(eid)) continue;
+          const did = er?.device_id;
+          if (!did) continue;
+          if (/_ch_\d+_messages$/.test(eid) ||
+              /_node_status_/.test(eid) ||
+              /_companion_prefix$/.test(eid) ||
+              /_last_message_delivery_/.test(eid)) {
+            companionDeviceIds.add(did);
+          }
+        }
+        for (const did of companionDeviceIds) {
+          const dev = devices[did];
+          if (!dev) continue;
+          extractFromDeviceName(dev.name);
+          extractFromDeviceName(dev.name_by_user);
+        }
+      }
+    } catch (_) { /* registry niedostępny */ }
+
+    if (names.size === 0) names.add("hub");
+    return names;
+  }
+
+  private _getMyHubName(): string {
+    const first = this._getMyHubNames().values().next().value;
+    return first || "Hub";
+  }
+
+  private _isFromMyHub(sender: string): boolean {
+    const s = (sender || "").toLowerCase().trim();
+    if (!s) return false;
+    const names = this._getMyHubNames();
+    if (names.has(s)) return true;
+    for (const name of names) {
+      if (name.startsWith(s) || s.startsWith(name)) return true;
+    }
+    return false;
   }
 
   private _getChannels(): any[] {
@@ -411,19 +493,14 @@ export class MeshcoreMessageCard extends HTMLElement {
     let sender = "";
     let content = fullText;
 
-    // Od meshcore 3.x (fix #370) nazwa przed pierwszym ": " jest zawsze nadawcą
-    // — niezależnie od tego, czy nadawca jest kontaktem na companionie.
+    // Od meshcore 3.x (fix #370) nazwa przed pierwszym ": " jest zawsze nadawcą.
     const colonIndex = fullText.indexOf(": ");
     if (colonIndex !== -1) {
       const before = fullText.substring(0, colonIndex);
       content = fullText.substring(colonIndex + 2);
-
-      // HA logbook może poprzedzać wpis formatem "Hub > Nadawca: tekst".
-      // Zachowujemy kompatybilność — bierzemy część po ostatnim ">".
       const gtIndex = before.lastIndexOf(">");
       sender = (gtIndex !== -1 ? before.substring(gtIndex + 1) : before).trim();
     } else {
-      // Fallback dla wpisów bez ": " (starsze formaty bez dwukropka).
       const gtIndex = fullText.indexOf(">");
       if (gtIndex !== -1) {
         const afterGt = fullText.substring(gtIndex + 1).trim();
@@ -451,7 +528,7 @@ export class MeshcoreMessageCard extends HTMLElement {
 
     if (!sender || sender === "?") return null;
 
-    const isSent = sender.toLowerCase() === myHubName.toLowerCase();
+    const isSent = this._isFromMyHub(sender);
     return {
       text: content || fullText,
       fullText,
@@ -576,7 +653,6 @@ export class MeshcoreMessageCard extends HTMLElement {
     setTimeout(() => { overlay.style.opacity = "0"; setTimeout(() => { if (overlay.parentNode) overlay.remove(); }, 300); }, 1500);
   }
 
-  /* ---------- Kopiowanie przez przytrzymanie ---------- */
   private _setupCopyListeners(): void {
     const container = this.shadowRoot?.querySelector("#messages-container");
     if (!container) return;
@@ -698,7 +774,6 @@ export class MeshcoreMessageCard extends HTMLElement {
     setTimeout(() => { overlay.style.opacity = "0"; setTimeout(() => { if (overlay.parentNode) overlay.remove(); }, 300); }, 1500);
   }
 
-  /* ---------- Aktualizacja listy ---------- */
   private _updateTargetListOnly(): void {
     if (this._isUpdating) return;
     const targetSelect = this.shadowRoot?.querySelector("#target-select") as HTMLSelectElement | null;
@@ -776,7 +851,6 @@ export class MeshcoreMessageCard extends HTMLElement {
     return t("message-card.days_ago", { n: days });
   }
 
-  /* ---------- Render wiadomości ---------- */
   private _renderMessages(loading = false): void {
     const container = this.shadowRoot?.querySelector("#messages-container");
     if (!container) return;
@@ -929,7 +1003,6 @@ export class MeshcoreMessageCard extends HTMLElement {
     this._fetchRxLogFromFile();
   }
 
-  /* ---------- Główny render ---------- */
   private _render(): void {
     if (!this._hass || !this._config) return;
     if (this._defaultChannel !== null) this._messageType = "channel";
